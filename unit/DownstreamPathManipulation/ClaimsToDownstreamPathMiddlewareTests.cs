@@ -1,0 +1,77 @@
+﻿using Microsoft.AspNetCore.Http;
+using Ocelot.Configuration;
+using Ocelot.Configuration.Builder;
+using Ocelot.DownstreamPathManipulation.Middleware;
+using Ocelot.DownstreamRouteFinder.UrlMatcher;
+using Ocelot.Logging;
+using Ocelot.Middleware;
+using Ocelot.PathManipulation;
+using Ocelot.Request.Middleware;
+using Ocelot.Responses;
+using Ocelot.Values;
+using System.Security.Claims;
+
+namespace Ocelot.UnitTests.DownstreamPathManipulation;
+
+[Trait("Feat", "968")] // https://github.com/ThreeMammals/Ocelot/pull/968
+[Trait("Release", "13.8.0")] // https://github.com/ThreeMammals/Ocelot/releases/tag/13.8.0
+public class ClaimsToDownstreamPathMiddlewareTests : UnitTest
+{
+    private readonly Mock<IChangeDownstreamPathTemplate> _changePath;
+    private readonly Mock<IOcelotLoggerFactory> _loggerFactory;
+    private readonly Mock<IOcelotLogger> _logger;
+    private readonly ClaimsToDownstreamPathMiddleware _middleware;
+    private readonly RequestDelegate _next;
+    private readonly DefaultHttpContext _httpContext;
+
+    public ClaimsToDownstreamPathMiddlewareTests()
+    {
+        _httpContext = new DefaultHttpContext();
+        _loggerFactory = new Mock<IOcelotLoggerFactory>();
+        _logger = new Mock<IOcelotLogger>();
+        _loggerFactory.Setup(x => x.CreateLogger<ClaimsToDownstreamPathMiddleware>()).Returns(_logger.Object);
+        _next = context => Task.CompletedTask;
+        _changePath = new Mock<IChangeDownstreamPathTemplate>();
+        _httpContext.Items.UpsertDownstreamRequest(new DownstreamRequest(new HttpRequestMessage(HttpMethod.Get, "http://test.com")));
+        _middleware = new ClaimsToDownstreamPathMiddleware(_next, _loggerFactory.Object, _changePath.Object);
+    }
+
+    [Fact]
+    public async Task Should_call_add_queries_correctly()
+    {
+        // Arrange
+        var route = new DownstreamRouteBuilder()
+                    .WithDownstreamPathTemplate("any old string")
+                    .WithClaimsToDownstreamPath(new List<ClaimToThing>
+                    {
+                        new("UserId", "Subject", string.Empty, 0),
+                    })
+                    .WithUpstreamHttpMethod(new List<string> { "Get" })
+                    .Build();
+        var downstreamRoute = new Ocelot.DownstreamRouteFinder.DownstreamRouteHolder(
+            new List<PlaceholderNameAndValue>(),
+            new Route(route, HttpMethod.Get));
+
+        // Arrange: Given The Down Stream Route Is
+        _httpContext.Items.UpsertTemplatePlaceholderNameAndValues(downstreamRoute.TemplatePlaceholderNameAndValues);
+        _httpContext.Items.UpsertDownstreamRoute(downstreamRoute.Route.DownstreamRoute[0]);
+
+        // Arrange: Given The Change Downstream Path Returns Ok
+        _changePath.Setup(x => x.ChangeDownstreamPath(
+                It.IsAny<List<ClaimToThing>>(),
+                It.IsAny<IEnumerable<Claim>>(),
+                It.IsAny<DownstreamPathTemplate>(),
+                It.IsAny<List<PlaceholderNameAndValue>>()))
+            .Returns(new OkResponse());
+
+        // Act
+        await _middleware.Invoke(_httpContext);
+
+        // Assert
+        _changePath.Verify(x => x.ChangeDownstreamPath(
+                It.IsAny<List<ClaimToThing>>(),
+                It.IsAny<IEnumerable<Claim>>(),
+                _httpContext.Items.DownstreamRoute().DownstreamPathTemplate,
+                _httpContext.Items.TemplatePlaceholderNameAndValues()), Times.Once);
+    }
+}
