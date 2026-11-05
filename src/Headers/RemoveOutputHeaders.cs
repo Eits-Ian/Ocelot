@@ -1,0 +1,24 @@
+using Microsoft.Net.Http.Headers;
+using Ocelot.Middleware;
+using Ocelot.Responses;
+
+namespace Ocelot.Headers;
+
+public class RemoveOutputHeaders : IRemoveOutputHeaders
+{
+    /// <summary>
+    /// Some webservers return headers that cannot be forwarded to the client
+    /// in a given context such as transfer encoding chunked when ASP.NET is not
+    /// returning the response in this manner.
+    /// </summary>
+    private readonly string[] _unsupportedRequestHeaders =
+    {
+        HeaderNames.TransferEncoding,
+    };
+
+    public Response Remove(List<Header> headers)
+    {
+        headers.RemoveAll(x => _unsupportedRequestHeaders.Contains(x.Key));
+        return new OkResponse();
+    }
+}

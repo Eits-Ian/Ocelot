@@ -1,0 +1,83 @@
+using Microsoft.AspNetCore.Http;
+using Ocelot.Configuration;
+using Ocelot.Middleware;
+using Ocelot.Multiplexer;
+using Ocelot.Responses;
+using Ocelot.UnitTests.Responder;
+
+namespace Ocelot.UnitTests.Multiplexer;
+
+public class UserDefinedResponseAggregatorTests : UnitTest
+{
+    private readonly UserDefinedResponseAggregator _aggregator;
+    private readonly Mock<IDefinedAggregatorProvider> _provider;
+
+    public UserDefinedResponseAggregatorTests()
+    {
+        _provider = new Mock<IDefinedAggregatorProvider>();
+        _aggregator = new UserDefinedResponseAggregator(_provider.Object);
+    }
+
+    [Fact]
+    public async Task Should_call_aggregator()
+    {
+        // Arrange
+        var route = new Route();
+        var context = new DefaultHttpContext();
+
+        var contextA = new DefaultHttpContext();
+        contextA.Items.UpsertDownstreamResponse(new DownstreamResponse(new StringContent("Tom"), HttpStatusCode.OK, new List<KeyValuePair<string, IEnumerable<string>>>(), "some reason"));
+
+        var contextB = new DefaultHttpContext();
+        contextB.Items.UpsertDownstreamResponse(new DownstreamResponse(new StringContent("Laura"), HttpStatusCode.OK, new List<KeyValuePair<string, IEnumerable<string>>>(), "some reason"));
+
+        var contexts = new List<HttpContext>
+        {
+            contextA,
+            contextB,
+        };
+
+        // Arrange: Given The Provider Returns Aggregator
+        var aggregator = new TestDefinedAggregator();
+        _provider.Setup(x => x.Get(It.IsAny<Route>())).Returns(new OkResponse<IDefinedAggregator>(aggregator));
+
+        // Act
+        await _aggregator.Aggregate(route, context, contexts);
+
+        // Assert
+        _provider.Verify(x => x.Get(route), Times.Once);
+        var content = await context.Items.DownstreamResponse().Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        content.ShouldBe("Tom, Laura");
+    }
+
+    [Fact]
+    public async Task Should_not_find_aggregator()
+    {
+        // Arrange
+        var route = new Route();
+        var context = new DefaultHttpContext();
+
+        var contextA = new DefaultHttpContext();
+        contextA.Items.UpsertDownstreamResponse(new DownstreamResponse(new StringContent("Tom"), HttpStatusCode.OK, new List<KeyValuePair<string, IEnumerable<string>>>(), "some reason"));
+
+        var contextB = new DefaultHttpContext();
+        contextB.Items.UpsertDownstreamResponse(new DownstreamResponse(new StringContent("Laura"), HttpStatusCode.OK, new List<KeyValuePair<string, IEnumerable<string>>>(), "some reason"));
+
+        var contexts = new List<HttpContext>
+        {
+            contextA,
+            contextB,
+        };
+
+        // Arrange: Given The Provider Returns Error
+        _provider.Setup(x => x.Get(It.IsAny<Route>())).Returns(new ErrorResponse<IDefinedAggregator>(new AnyError()));
+
+        // Act
+        await _aggregator.Aggregate(route, context, contexts);
+
+        // Assert
+        _provider.Verify(x => x.Get(route), Times.Once);
+        context.Items.Errors().Count.ShouldBeGreaterThan(0);
+        context.Items.Errors().Count.ShouldBe(1);
+    }
+}
